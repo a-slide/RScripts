@@ -5,81 +5,96 @@ options( warn = -1 )
 # FUNCTIONS
 ###################################################################################################
 
-sleuth_analysis = function(s2c, t2g, full_model, outdir, max_bootstrap, norm_fun, filter_fun, aggregation_column, sig_level, rds) {
+sleuth_analysis = function(s2c, t2g, full_model, outdir, max_bootstrap, norm_fun, filter_fun, aggregation_column, sig_level, wald, lrt, var_graph, rds) {
     
-    cat("Prepare the data for sleuth\n")
-    # Extract the data from the kallisto results.
+    cat("Extract the data from the kalisto results and normalise\n")
     so = sleuth_prep(s2c, full_model, filter_fun, t2g, max_bootstrap, norm_fun, norm_fun, aggregation_column)
     
-    
-    cat("Fit to full and reduced model\n")
-    # Estimate parameters for the sleuth response error measurement (full) model
+    cat("Estimate parameters for the sleuth response error measurement (full) model\n")
     so <- sleuth_fit(so)
-    # Estimate parameters for the sleuth reduced model (shrinkage)
+    
+    cat("Estimate parameters for the sleuth reduced model (shrinkage)\n")
     so = sleuth_fit(so, ~1, 'reduced')
     
-    cat("Perform wald testing\n")
-    # Performing Wald test for all possible cofactors
-    plots = list()
-    for (beta_factor in colnames(so$design_matrix)) {       
-        cat(paste("\tBeta factor:", beta_factor, "\n"))
-        so = sleuth_wt(so, which_beta=beta_factor, which_model="full")
+    ## Wald tests    
+    if (wald == TRUE){
+        cat("Performing Wald test for all cofactors\n")
+        plots = list()
+        for (beta_factor in colnames(so$design_matrix)) {       
+            cat(paste("\tAnalysing cofactor:", beta_factor, "\n"))
+            so = sleuth_wt(so, which_beta=beta_factor, which_model="full")
+            
+            cat("\t\tGenerate tables and plots\n")
+            # Extract and save the results in a table
+            res = sleuth_results(so, beta_factor, test_type="wt", which_model="full", show_all=FALSE)
+            fname = paste0(outdir, beta_factor, "_wald_test.tsv")
+            write.table(res, file = fname, row.names=TRUE, na="",col.names=TRUE, sep="\t", quote=FALSE)
+            
+            # Count number of significant points
+            cat(paste("\t\tSignificant genes: ", nrow(filter(res, qval<= sig_level)), "\n"))
+            cat(paste("\t\tSignificant genes enriched: ", nrow(filter(res, qval<= sig_level & b<0)), "\n"))
+            cat(paste("\t\tSignificant genes depleted: ", nrow(filter(res, qval<= sig_level & b>0)), "\n"))
+            
+            # Extract the ERCC results if available
+            ERCC_res = filter(res, grepl("ERCC",target_id) & !is.na(b) & !is.na(qval))
+            ERCC_id = select(ERCC_res, target_id)
+            
+            # Volcano plot
+            p = plot_volcano(so, beta_factor, sig_level=sig_level)
+            p = p+ggtitle(paste("Volcano Plot, Wald test, Full Model, FDR" ,sig_level ,"Condition", beta_factor))
+            p = p+geom_point(data=ERCC_res, aes(b, -log10(qval)), colour="lightgreen")
+            plots =  append(plots, list(p))
+            
+            # MA plot
+            p = plot_ma(so, beta_factor, sig_level=sig_level, highlight=ERCC_id, highlight_color = "lightgreen")
+            p = p+ggtitle(paste("MA Plot, Wald test, Full Model, FDR" ,sig_level ,"Condition", beta_factor))
+            plots =  append(plots, list(p))
+            
+            # QQ plot
+            p = plot_qq(so, beta_factor, sig_level=sig_level)
+            p = p+ggtitle(paste("MA Plot, Wald test, Full Model, FDR" ,sig_level ,"Condition", beta_factor))
+            plots =  append(plots, list(p))
+        }
         
-        # Extract and save the results in a table
-        res = sleuth_results(so, beta_factor, test_type="wt", which_model="full", show_all=TRUE)
-        fname = paste0(outdir, beta_factor, "_wald_test.tsv")
-        write.table(res, file = fname, row.names=TRUE, na="",col.names=TRUE, sep="\t", quote=FALSE)
-        
-        # Extract the ERCC results if available
-        ERCC_res = filter(res, grepl("ERCC",target_id) & !is.na(b) & !is.na(qval))
-        ERCC_id = select(ERCC_res, target_id)
-        
-        # Volcano plot
-        p = plot_volcano(so, beta_factor, sig_level=sig_level)
-        p = p+ggtitle(paste("Volcano Plot, Wald test, Full Model, FDR" ,sig_level ,"Condition", beta_factor))
-        p = p+geom_point(data=ERCC_res, aes(b, -log10(qval)), colour="lightgreen")
-        plots =  append(plots, list(p))
-        
-        # MA plot
-        p = plot_ma(so, beta_factor, sig_level=sig_level, highlight=ERCC_id, highlight_color = "lightgreen")
-        p = p+ggtitle(paste("MA Plot, Wald test, Full Model, FDR" ,sig_level ,"Condition", beta_factor))
-        plots =  append(plots, list(p))
-        
-        # QQ plot
-        p = plot_qq(so, beta_factor, sig_level=sig_level)
-        p = p+ggtitle(paste("MA Plot, Wald test, Full Model, FDR" ,sig_level ,"Condition", beta_factor))
-        plots =  append(plots, list(p))
+        cat("\tExport plots\n")
+        # Plot all the wald test graphs in the same file
+        gs = marrangeGrob(grobs=plots, nrow=3, ncol=1)
+        ggsave(paste0(outdir, "Wald_DE_plot.pdf"), gs, width=15, height=15)
     }
     
-    # Plot all the wald test graphs in the same file
-    gs = marrangeGrob(grobs=plots, nrow=3, ncol=1)
-    ggsave(paste0(outdir, "Wald_DE_plot.pdf"), gs, width=15, height=15)
-
-    cat("Perform likelyhood ratio testing\n")
-    # Perform likelihood ratio test
-    so = sleuth_lrt(so, 'reduced', 'full')
-    # Save all the results in a table
-    res = sleuth_results(so, 'reduced:full', test_type = 'lrt')
-    fname = paste0(outdir, "likelyhood_ratio_test.tsv")
-    write.table(res, file = fname, row.names=TRUE, na="",col.names=TRUE, sep="\t", quote=FALSE)
+    ## Likelyhood ratio tests
+    if (lrt == TRUE){
+        cat("Perform likelyhood ratio testing\n")
+        so = sleuth_lrt(so, 'reduced', 'full')
+        
+        cat("\t\tExport tables\n")
+        # Save all the results in a table
+        res = sleuth_results(so, 'reduced:full', test_type = 'lrt')
+        fname = paste0(outdir, "likelyhood_ratio_test.tsv")
+        write.table(res, file = fname, row.names=TRUE, na="",col.names=TRUE, sep="\t", quote=FALSE)
+        
+        # Count number of significant points
+        cat(paste("\t\tSignificant genes: ", nrow(filter(res, qval<= sig_level)), "\n"))
+    }
     
-    cat("plot graphs\n")
-    # plot PCA graph
-    p1 = plot_pca(so, text_labels=T, use_filtered = T, units = 'tpm')
-    p1 = p1+ggtitle(paste("PCA plot, PC1/PC2, Unit tpm"))
-    
-    # plot principal component contribution to the variance 
-    p2 = plot_pc_variance(so, scale=T, use_filtered = T, units = 'tpm', )
-    p2 = p2+ggtitle(paste("% contribution to PC variances, Unit tpm, Scaled, Filtered values"))
-    
-    # plot the mean variance graph with fitting line
-    p3 = plot_mean_var(so)
-    p3 = p3+ggtitle(paste("Mean Variance plot"))
-    
-    # Plot all the graphs in the same file
-    lay = rbind(c(1,1,1,NA,NA), c(1,1,1,2,2), c(1,1,1,2,2), c(3,3,3,3,3), c(3,3,3,3,3))
-    gs = grid.arrange(p1, p2, p3, layout_matrix = lay)
-    ggsave(paste0(outdir, "variance_plots.pdf"), gs, width=15, height=15)
+    ## Variance graphs
+    if (var_graph == TRUE){
+        cat("Plot variance graphs\n")
+        # plot PCA graph
+        p1 = plot_pca(so, text_labels=T, use_filtered = T, units = 'tpm')
+        p1 = p1+ggtitle(paste("PCA plot, PC1/PC2, Unit tpm"))
+        # plot principal component contribution to the variance
+        p2 = plot_pc_variance(so, scale=T, use_filtered = T, units = 'tpm', )
+        p2 = p2+ggtitle(paste("% contribution to PC variances, Unit tpm, Scaled, Filtered values"))
+        # plot the mean variance graph with fitting line
+        p3 = plot_mean_var(so)
+        p3 = p3+ggtitle(paste("Mean Variance plot"))
+        
+        # Plot all the graphs in the same file
+        lay = rbind(c(1,1,1,NA,NA), c(1,1,1,2,2), c(1,1,1,2,2), c(3,3,3,3,3), c(3,3,3,3,3))
+        gs = grid.arrange(p1, p2, p3, layout_matrix = lay)
+        ggsave(paste0(outdir, "variance_plots.pdf"), gs, width=15, height=15)
+    }
     
     #Save the Sleuth object for further analysis if requested
     if (rds == TRUE) {
@@ -96,10 +111,10 @@ sleuth_analysis = function(s2c, t2g, full_model, outdir, max_bootstrap, norm_fun
 
 # Lib import
 options(width = 160) # wider terminal size
+suppressWarnings(suppressMessages(library("dplyr")))
 suppressPackageStartupMessages(library("ggplot2"))
-suppressPackageStartupMessages(library("dplyr"))
 suppressPackageStartupMessages(library("methods"))
-suppressPackageStartupMessages(library("sleuth"))
+suppressWarnings(suppressMessages(library("sleuth")))
 suppressPackageStartupMessages(library("optparse"))
 suppressPackageStartupMessages(library(grid))
 suppressPackageStartupMessages(library(gridExtra))
@@ -134,11 +149,20 @@ option_list = list(
         help="Number of core to be used (for gene level aggregation only) [default \"%default\"]"),
     make_option(c("-s", "--sig_level"), type="double", metavar="number", default=0.1,
         help="FDR threshold fo significance in the plots [default \"%default\"]"),
+    make_option(c("-w", "--wald"), action="store_true", default=FALSE,
+        help="If given, will perform differential expression tests with wald method and plot corresponding graphs [default \"%default\"]"),
+    make_option(c("-l", "--lrt"), action="store_true", default=FALSE,
+        help="If given, will perform differential expression tests with likelyhood method (no graph) [default \"%default\"]"),
+    make_option(c("-g", "--var_graph"), action="store_true", default=FALSE,
+        help="If given, will plot variance graphs (PCA, Mean variance plot) [default \"%default\"]"),
     make_option(c("-r", "--rds"), action="store_true", default=FALSE,
         help="If given, output an rds file for further analysis with sleuth_live (takes time) [default \"%default\"]"))
 
+# Define usage string
+usage = "SleuthDEA.T --s2c Sample_Sheet_file.tsv [--t2g transcript_to_gene.tsv, ...]"
+
 # Parse Arguments
-opt_parser = OptionParser(option_list=option_list)
+opt_parser = OptionParser(usage=usage, option_list=option_list)
 opt = parse_args(opt_parser)
 
 cat("Parse arguments and import files\n")
@@ -193,8 +217,28 @@ if (is.null(opt$t2g) | opt$aggreg_col == FALSE) {
 # Multicore option
 options(mc.cores = opt$threads)
 
+#cat ("\nRunning with the following options:\n")
+#cat ("\ts2c:", opt$s2c, "\n")
+#cat ("\tt2g: ", opt$t2g, "\n")
+#cat ("\toutdir: ", opt$outdir ,"\n")
+#cat ("\tselect_col: ", opt$select_col ,"\n")
+#cat ("\tselect_val: ", opt$select_val ,"\n")
+#cat ("\tfull_model: ", opt$full_model ,"\n")
+#cat ("\tmax_bootstrap: ", opt$max_bootstrap ,"\n")
+#cat ("\tno_norm: ", opt$no_norm ,"\n")
+#cat ("\tmin_est: ", opt$min_est ,"\n")
+#cat ("\tmin_prop: ", opt$min_prop ,"\n")
+#cat ("\taggreg_col: ", opt$aggreg_col ,"\n")
+#cat ("\tthreads: ", opt$threads ,"\n")
+#cat ("\tsig_level: ", opt$sig_level ,"\n")
+#cat ("\twald: ", opt$wald ,"\n")
+#cat ("\tlrt: ", opt$lrt ,"\n")
+#cat ("\tvar_graph: ", opt$var_graph ,"\n")
+#cat ("\trds: ", opt$rds ,"\n")
+
 cat ("\n### SLEUTH ANALYSIS ###\n")
 # Launch the Sleuth Pipeline
-so = sleuth_analysis(s2c, t2g, full_model, opt$outdir, opt$max_bootstrap, norm_fun, filter_fun, aggregation_column, opt$sig_level, opt$rds)
+so = sleuth_analysis(s2c, t2g, full_model, opt$outdir, opt$max_bootstrap, norm_fun, filter_fun, aggregation_column, opt$sig_level,
+     opt$wald, opt$lrt, opt$var_graph, opt$rds)
 
 cat ("\n### DONE ###\n")
