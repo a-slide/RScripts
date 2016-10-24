@@ -108,14 +108,16 @@ sleuth_analysis = function(s2c, t2g, full_model, outdir, max_bootstrap, norm_fun
     # Table of normalized counts
     if (count_table == TRUE){
         cat("Export count table\n")
-        fname = paste0(outdir, "obs_norm.tsv")
+        fname = paste0(outdir, "obs_normalised.tsv")
         write.table(so$obs_norm, file = fname, row.names=TRUE, na="",col.names=TRUE, sep="\t", quote=FALSE)
+        fname = paste0(outdir, "obs_normalised_filtered.tsv")
+        write.table(so$obs_norm_filt, file = fname, row.names=TRUE, na="",col.names=TRUE, sep="\t", quote=FALSE)
     }
     
     # Table of fit parameters counts
     if (fit_table == TRUE) {
         cat("Export fit table\n")
-        fname = paste0(outdir, "obs_norm_filt.tsv")
+        fname = paste0(outdir, "fits_summary.tsv")
         write.table(so$fits[["full"]]$summary, file = fname, row.names=TRUE, na="",col.names=TRUE, sep="\t", quote=FALSE)
     }
     
